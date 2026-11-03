@@ -1,0 +1,7 @@
+name = "html-labs-backup"
+main = "src/index.ts"
+compatibility_date = "2026-07-06"
+
+kv_namespaces = [
+  { binding = "HTML_BACKUPS", id = "4eb6c699ea96480ab76766574aaba0d5", preview_id = "97fd36308f6249c681caa4fb536e2102" }
+]
