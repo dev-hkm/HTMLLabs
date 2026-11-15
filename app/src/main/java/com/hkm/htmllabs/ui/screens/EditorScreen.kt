@@ -1,7 +1,6 @@
 package com.hkm.htmllabs.ui.screens
 
 import android.view.HapticFeedbackConstants
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -16,11 +15,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -51,13 +51,12 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.navigationBars
 import com.hkm.htmllabs.R
 import com.hkm.htmllabs.data.HtmlCard
 import com.hkm.htmllabs.data.HtmlTag
 import com.hkm.htmllabs.ui.components.GradientChoiceOption
 import com.hkm.htmllabs.ui.components.GradientPickerDialog
+import com.hkm.htmllabs.ui.theme.applePressable
 import com.hkm.htmllabs.utils.HtmlUtils
 import com.hkm.htmllabs.utils.TagPresets
 
@@ -102,11 +101,6 @@ fun EditorScreen(
                 e.printStackTrace()
             }
         }
-    }
-
-    BackHandler {
-        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        onCancel()
     }
 
     LaunchedEffect(htmlContent) {
@@ -197,7 +191,9 @@ fun EditorScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp)
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Row(
                 modifier = Modifier
@@ -219,8 +215,7 @@ fun EditorScreen(
                             .width(40.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .background(colorScheme.primary)
-                            .clickable {
-                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            .applePressable(pressedScale = 0.92f) {
                                 importLauncher.launch(arrayOf("text/html", "text/*", "*/*"))
                             },
                         contentAlignment = Alignment.Center
@@ -446,8 +441,6 @@ fun EditorScreen(
                     )
                 }
             }
-
-            Spacer(modifier = Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
         }
     }
 }

@@ -48,6 +48,8 @@ import androidx.compose.ui.unit.dp
 import com.hkm.htmllabs.R
 import com.hkm.htmllabs.data.HtmlCard
 import com.hkm.htmllabs.ui.components.HtmlPreview
+import com.hkm.htmllabs.ui.theme.AppMotion
+import com.hkm.htmllabs.ui.theme.applePressable
 import com.hkm.htmllabs.utils.GradientPresets
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -123,7 +125,7 @@ fun HtmlCardItem(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .animateContentSize(),
+            .animateContentSize(animationSpec = AppMotion.intSizeLayoutSpring()),
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
@@ -280,7 +282,7 @@ private fun RowScope.ActionBox(
     Box(
         modifier = modifier
             .fillMaxHeight()
-            .clickable(onClick = onClick),
+            .applePressable(pressedScale = 0.94f, enableHaptic = false, onClick = onClick),
         contentAlignment = Alignment.Center,
         content = content
     )

@@ -1,5 +1,6 @@
 package com.hkm.htmllabs.ui.screens
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.DownloadManager
@@ -7,12 +8,14 @@ import android.content.ActivityNotFoundException
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.Message
 import android.provider.MediaStore
 import android.util.Base64
 import android.view.HapticFeedbackConstants
@@ -20,15 +23,25 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
+import android.webkit.GeolocationPermissions
 import android.webkit.JavascriptInterface
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
+import android.webkit.PermissionRequest
 import android.webkit.URLUtil
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,15 +49,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -62,11 +80,14 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.webkit.WebViewAssetLoader
 import com.hkm.htmllabs.R
 import com.hkm.htmllabs.data.HtmlCard
+import com.hkm.htmllabs.ui.theme.AppMotion
 import com.hkm.htmllabs.utils.HtmlUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -90,7 +111,63 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
     var localPageUrl by remember { mutableStateOf<String?>(null) }
     var isFullscreen by remember { mutableStateOf(false) }
 
+    // Mini-browser interactive states (permissions, file upload, JS dialogs, custom video fullscreen)
+    var pendingPermissionRequest by remember { mutableStateOf<PermissionRequest?>(null) }
+    var pendingGeolocationOrigin by remember { mutableStateOf<String?>(null) }
+    var pendingGeolocationCallback by remember { mutableStateOf<GeolocationPermissions.Callback?>(null) }
+    var filePathCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+    var customVideoView by remember { mutableStateOf<View?>(null) }
+    var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
+    var jsAlertState by remember { mutableStateOf<Pair<String, JsResult>?>(null) }
+    var jsConfirmState by remember { mutableStateOf<Pair<String, JsResult>?>(null) }
+    var jsPromptState by remember { mutableStateOf<Triple<String, String, JsPromptResult>?>(null) }
+    var jsPromptInput by remember { mutableStateOf("") }
+
     val activity = context.findActivity()
+
+    val mediaPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val req = pendingPermissionRequest
+        if (req != null) {
+            val allGranted = results.values.all { it }
+            if (allGranted) {
+                req.grant(req.resources)
+            } else {
+                req.deny()
+            }
+            pendingPermissionRequest = null
+        }
+        val geoOrigin = pendingGeolocationOrigin
+        val geoCallback = pendingGeolocationCallback
+        if (geoOrigin != null && geoCallback != null) {
+            val granted = results[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                results[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+            geoCallback.invoke(geoOrigin, granted, false)
+            pendingGeolocationOrigin = null
+            pendingGeolocationCallback = null
+        }
+    }
+
+    val fileChooserLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val callback = filePathCallback
+        filePathCallback = null
+        if (callback == null) return@rememberLauncherForActivityResult
+        val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+            ?: result.data?.clipData?.let { clip ->
+                Array(clip.itemCount) { i -> clip.getItemAt(i).uri }
+            }
+        callback.onReceiveValue(uris)
+    }
+
+    val assetLoader = remember(context) {
+        val labsRoot = File(context.filesDir, "htmllabs").apply { if (!exists()) mkdirs() }
+        WebViewAssetLoader.Builder()
+            .addPathHandler("/labs/", WebViewAssetLoader.InternalStoragePathHandler(context, labsRoot))
+            .build()
+    }
 
     LaunchedEffect(card.id, card.htmlContent) {
         withContext(Dispatchers.IO) {
@@ -98,7 +175,9 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
             if (!cardDir.exists()) cardDir.mkdirs()
             val htmlFile = File(cardDir, "index.html")
             htmlFile.writeText(card.htmlContent)
-            localPageUrl = htmlFile.toURI().toString()
+            // Serve over HTTPS appassets origin so WebRTC/getUserMedia, MediaRecorder,
+            // AudioWorklet, ES modules, and crypto.subtle have a Secure Context.
+            localPageUrl = "https://appassets.androidplatform.net/labs/${card.id}/index.html"
             fileReady = true
         }
     }
@@ -118,9 +197,14 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
         }
     }
 
-    BackHandler {
+    BackHandler(enabled = isFullscreen || canGoBack || customVideoView != null) {
         val webView = webViewRef.value
         when {
+            customVideoView != null -> {
+                customViewCallback?.onCustomViewHidden()
+                customVideoView = null
+                customViewCallback = null
+            }
             isFullscreen -> {
                 view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                 isFullscreen = false
@@ -128,10 +212,6 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
             webView != null && webView.canGoBack() -> {
                 view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                 webView.goBack()
-            }
-            else -> {
-                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                onClose()
             }
         }
     }
@@ -230,6 +310,7 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
             AndroidView(
                 modifier = Modifier
                     .fillMaxSize()
+                    .then(if (isFullscreen) Modifier else Modifier.navigationBarsPadding())
                     .background(colorScheme.background),
                 factory = { ctx ->
                     val blobBridge = BlobDownloadBridge(ctx)
@@ -241,8 +322,14 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
+                            databaseEnabled = true
                             allowFileAccess = true
                             allowContentAccess = true
+                            @Suppress("DEPRECATION")
+                            allowFileAccessFromFileURLs = true
+                            @Suppress("DEPRECATION")
+                            allowUniversalAccessFromFileURLs = true
+                            setGeolocationEnabled(true)
                             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                             useWideViewPort = true
                             loadWithOverviewMode = true
@@ -253,7 +340,7 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
                             defaultTextEncodingName = "UTF-8"
                             javaScriptCanOpenWindowsAutomatically = true
                             setSupportZoom(true)
-                            setSupportMultipleWindows(false)
+                            setSupportMultipleWindows(true)
                         }
 
                         CookieManager.getInstance().setAcceptCookie(true)
@@ -282,9 +369,183 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
                             override fun onReceivedTitle(view: WebView?, title: String?) {
                                 if (!title.isNullOrBlank()) pageTitle = title
                             }
+
+                            override fun onPermissionRequest(request: PermissionRequest?) {
+                                if (request == null) return
+                                val neededPermissions = mutableListOf<String>()
+                                request.resources.forEach { res ->
+                                    when (res) {
+                                        PermissionRequest.RESOURCE_AUDIO_CAPTURE -> {
+                                            if (ContextCompat.checkSelfPermission(
+                                                    ctx,
+                                                    Manifest.permission.RECORD_AUDIO
+                                                ) != PackageManager.PERMISSION_GRANTED
+                                            ) {
+                                                neededPermissions.add(Manifest.permission.RECORD_AUDIO)
+                                            }
+                                        }
+                                        PermissionRequest.RESOURCE_VIDEO_CAPTURE -> {
+                                            if (ContextCompat.checkSelfPermission(
+                                                    ctx,
+                                                    Manifest.permission.CAMERA
+                                                ) != PackageManager.PERMISSION_GRANTED
+                                            ) {
+                                                neededPermissions.add(Manifest.permission.CAMERA)
+                                            }
+                                        }
+                                    }
+                                }
+                                if (neededPermissions.isEmpty()) {
+                                    request.grant(request.resources)
+                                } else {
+                                    pendingPermissionRequest = request
+                                    mediaPermissionLauncher.launch(neededPermissions.toTypedArray())
+                                }
+                            }
+
+                            override fun onGeolocationPermissionsShowPrompt(
+                                origin: String?,
+                                callback: GeolocationPermissions.Callback?
+                            ) {
+                                if (origin == null || callback == null) return
+                                val hasFine = ContextCompat.checkSelfPermission(
+                                    ctx,
+                                    Manifest.permission.ACCESS_FINE_LOCATION
+                                ) == PackageManager.PERMISSION_GRANTED
+                                val hasCoarse = ContextCompat.checkSelfPermission(
+                                    ctx,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (hasFine || hasCoarse) {
+                                    callback.invoke(origin, true, false)
+                                } else {
+                                    pendingGeolocationOrigin = origin
+                                    pendingGeolocationCallback = callback
+                                    mediaPermissionLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                }
+                            }
+
+                            override fun onShowFileChooser(
+                                webView: WebView?,
+                                filePathCallbackArg: ValueCallback<Array<Uri>>?,
+                                fileChooserParams: FileChooserParams?
+                            ): Boolean {
+                                filePathCallback?.onReceiveValue(null)
+                                filePathCallback = filePathCallbackArg
+                                val intent = runCatching {
+                                    fileChooserParams?.createIntent()
+                                }.getOrNull() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                    type = "*/*"
+                                }
+                                if (fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                                }
+                                return try {
+                                    fileChooserLauncher.launch(intent)
+                                    true
+                                } catch (_: Exception) {
+                                    filePathCallback?.onReceiveValue(null)
+                                    filePathCallback = null
+                                    Toast.makeText(ctx, "No file picker available", Toast.LENGTH_SHORT).show()
+                                    false
+                                }
+                            }
+
+                            override fun onCreateWindow(
+                                view: WebView?,
+                                isDialog: Boolean,
+                                isUserGesture: Boolean,
+                                resultMsg: Message?
+                            ): Boolean {
+                                val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                                val tempWebView = WebView(ctx).apply {
+                                    webViewClient = object : WebViewClient() {
+                                        override fun shouldOverrideUrlLoading(
+                                            v: WebView?,
+                                            req: WebResourceRequest?
+                                        ): Boolean {
+                                            val targetUrl = req?.url?.toString()
+                                            if (!targetUrl.isNullOrBlank()) {
+                                                view?.loadUrl(targetUrl)
+                                            }
+                                            destroy()
+                                            return true
+                                        }
+                                    }
+                                }
+                                transport.webView = tempWebView
+                                resultMsg.sendToTarget()
+                                return true
+                            }
+
+                            override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                                if (customVideoView != null) {
+                                    callback?.onCustomViewHidden()
+                                    return
+                                }
+                                customVideoView = view
+                                customViewCallback = callback
+                                isFullscreen = true
+                            }
+
+                            override fun onHideCustomView() {
+                                customVideoView = null
+                                customViewCallback?.onCustomViewHidden()
+                                customViewCallback = null
+                                isFullscreen = false
+                            }
+
+                            override fun onJsAlert(
+                                view: WebView?,
+                                url: String?,
+                                message: String?,
+                                result: JsResult?
+                            ): Boolean {
+                                if (result == null) return false
+                                jsAlertState = (message ?: "") to result
+                                return true
+                            }
+
+                            override fun onJsConfirm(
+                                view: WebView?,
+                                url: String?,
+                                message: String?,
+                                result: JsResult?
+                            ): Boolean {
+                                if (result == null) return false
+                                jsConfirmState = (message ?: "") to result
+                                return true
+                            }
+
+                            override fun onJsPrompt(
+                                view: WebView?,
+                                url: String?,
+                                message: String?,
+                                defaultValue: String?,
+                                result: JsPromptResult?
+                            ): Boolean {
+                                if (result == null) return false
+                                jsPromptInput = defaultValue ?: ""
+                                jsPromptState = Triple(message ?: "", defaultValue ?: "", result)
+                                return true
+                            }
                         }
 
                         webViewClient = object : WebViewClient() {
+                            override fun shouldInterceptRequest(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): WebResourceResponse? {
+                                val reqUrl = request?.url ?: return null
+                                return assetLoader.shouldInterceptRequest(reqUrl)
+                            }
+
                             override fun shouldOverrideUrlLoading(
                                 view: WebView?,
                                 request: WebResourceRequest?
@@ -358,13 +619,34 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
             }
         }
 
-        if (isFullscreen) {
-            Box(
+        customVideoView?.let { videoView ->
+            AndroidView(
+                factory = { ctx ->
+                    FrameLayout(ctx).apply {
+                        (videoView.parent as? ViewGroup)?.removeView(videoView)
+                        addView(videoView)
+                    }
+                },
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(16.dp)
-                    .background(colorScheme.surface.copy(alpha = 0.9f), RoundedCornerShape(16.dp))
+                    .fillMaxSize()
+                    .background(androidx.compose.ui.graphics.Color.Black)
+            )
+        }
+
+        AnimatedVisibility(
+            visible = isFullscreen && customVideoView == null,
+            enter = AppMotion.floatingBarEnter,
+            exit = AppMotion.floatingBarExit,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(16.dp)
+        ) {
+            Box(
+                modifier = Modifier.background(
+                    colorScheme.surface.copy(alpha = 0.92f),
+                    RoundedCornerShape(16.dp)
+                )
             ) {
                 IconButton(onClick = { isFullscreen = false }) {
                     Icon(
@@ -374,6 +656,126 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
                     )
                 }
             }
+        }
+
+        jsAlertState?.let { (message, result) ->
+            AlertDialog(
+                onDismissRequest = {
+                    result.cancel()
+                    jsAlertState = null
+                },
+                title = { Text(pageTitle, color = colorScheme.onSurface) },
+                text = { Text(message, color = colorScheme.onSurface.copy(alpha = 0.85f)) },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            result.confirm()
+                            jsAlertState = null
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.primary,
+                            contentColor = colorScheme.onPrimary
+                        )
+                    ) { Text("OK") }
+                },
+                shape = RoundedCornerShape(24.dp),
+                containerColor = colorScheme.surface
+            )
+        }
+
+        jsConfirmState?.let { (message, result) ->
+            AlertDialog(
+                onDismissRequest = {
+                    result.cancel()
+                    jsConfirmState = null
+                },
+                title = { Text(pageTitle, color = colorScheme.onSurface) },
+                text = { Text(message, color = colorScheme.onSurface.copy(alpha = 0.85f)) },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            result.confirm()
+                            jsConfirmState = null
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.primary,
+                            contentColor = colorScheme.onPrimary
+                        )
+                    ) { Text("OK") }
+                },
+                dismissButton = {
+                    Button(
+                        onClick = {
+                            result.cancel()
+                            jsConfirmState = null
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.secondary,
+                            contentColor = colorScheme.onSecondary
+                        )
+                    ) { Text("Cancel") }
+                },
+                shape = RoundedCornerShape(24.dp),
+                containerColor = colorScheme.surface
+            )
+        }
+
+        jsPromptState?.let { (message, _, result) ->
+            AlertDialog(
+                onDismissRequest = {
+                    result.cancel()
+                    jsPromptState = null
+                },
+                title = { Text(pageTitle, color = colorScheme.onSurface) },
+                text = {
+                    Column {
+                        if (message.isNotBlank()) {
+                            Text(
+                                text = message,
+                                color = colorScheme.onSurface.copy(alpha = 0.85f),
+                                modifier = Modifier.padding(bottom = 10.dp)
+                            )
+                        }
+                        OutlinedTextField(
+                            value = jsPromptInput,
+                            onValueChange = { jsPromptInput = it },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp)
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            result.confirm(jsPromptInput)
+                            jsPromptState = null
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.primary,
+                            contentColor = colorScheme.onPrimary
+                        )
+                    ) { Text("OK") }
+                },
+                dismissButton = {
+                    Button(
+                        onClick = {
+                            result.cancel()
+                            jsPromptState = null
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.secondary,
+                            contentColor = colorScheme.onSecondary
+                        )
+                    ) { Text("Cancel") }
+                },
+                shape = RoundedCornerShape(24.dp),
+                containerColor = colorScheme.surface
+            )
         }
 
         hasError?.let { err ->
