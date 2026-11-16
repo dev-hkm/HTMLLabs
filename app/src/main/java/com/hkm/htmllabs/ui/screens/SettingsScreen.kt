@@ -109,6 +109,7 @@ fun SettingsScreen(
     var showReplaceDialog by remember { mutableStateOf(false) }
     var showDeleteCloudBackupDialog by remember { mutableStateOf(false) }
     var showExportHtmlDialog by remember { mutableStateOf(false) }
+    var showManageCodeDialog by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
 
     val reduceMotion = rememberReduceMotion()
@@ -238,6 +239,31 @@ fun SettingsScreen(
             onSelect = { card ->
                 showExportHtmlDialog = false
                 onExportSingleHtml(card)
+            }
+        )
+    }
+
+    if (showManageCodeDialog) {
+        ManageBackupCodeDialog(
+            maskedCode = localToken?.let { CloudBackupManager.maskToken(it) } ?: "",
+            onDismiss = { showManageCodeDialog = false },
+            onUseAnotherCode = {
+                showManageCodeDialog = false
+                showUseExistingTokenDialog = true
+            },
+            onCreateNewCode = {
+                showManageCodeDialog = false
+                showReplaceDialog = true
+            },
+            onClearLocalCode = {
+                showManageCodeDialog = false
+                AppSettings.clearCloudBackupToken(context)
+                localToken = null
+                statusMessage = "Backup code removed from this device"
+            },
+            onDeleteCloudBackup = {
+                showManageCodeDialog = false
+                showDeleteCloudBackupDialog = true
             }
         )
     }
@@ -439,7 +465,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 3. CLOUD BACKUP
+            // 3. CLOUD BACKUP (Simplified for effortless non-tech UX)
             item(key = "settings_cloud_backup_section") {
                 Column(
                     modifier = Modifier
@@ -449,7 +475,8 @@ fun SettingsScreen(
                     SettingsSectionHeader("Cloud Backup")
                     Spacer(Modifier.height(8.dp))
                     SettingsCard {
-                        // Token status banner
+                        val hasCode = !localToken.isNullOrBlank()
+                        // Compact status pill
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = colorScheme.secondary.copy(alpha = 0.65f),
@@ -463,23 +490,19 @@ fun SettingsScreen(
                                     .padding(horizontal = 14.dp, vertical = 12.dp)
                             ) {
                                 Text(
-                                    text = if (localToken.isNullOrBlank()) {
-                                        "No token saved"
-                                    } else {
-                                        CloudBackupManager.maskToken(localToken!!)
-                                    },
+                                    text = if (hasCode) "Cloud Backup Ready" else "Not backed up yet",
                                     color = colorScheme.onSecondary,
                                     fontWeight = FontWeight.SemiBold,
                                     fontSize = 14.sp
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = if (lastCloudBackupAt.isNullOrBlank()) {
-                                        "Create or add a token, then back up ${cards.size} cards"
-                                    } else {
-                                        "Last backup: $lastCloudBackupAt"
+                                    text = when {
+                                        !hasCode -> "Tap Back up now to save ${cards.size} cards & get a personal backup code."
+                                        !lastCloudBackupAt.isNullOrBlank() -> "Last saved: $lastCloudBackupAt · ${CloudBackupManager.maskToken(localToken!!)}"
+                                        else -> "${cards.size} cards ready · Code: ${CloudBackupManager.maskToken(localToken!!)}"
                                     },
-                                    color = colorScheme.onSecondary.copy(alpha = 0.68f),
+                                    color = colorScheme.onSecondary.copy(alpha = 0.7f),
                                     fontSize = 12.sp
                                 )
                             }
@@ -488,35 +511,35 @@ fun SettingsScreen(
                         SettingsDivider()
 
                         SettingsRow(
-                            iconRes = R.drawable.ic_key_plus,
-                            title = if (localToken.isNullOrBlank()) "Create backup token" else "Create new token",
-                            subtitle = "Generate a fresh token and reveal it one time",
-                            onClick = { showReplaceDialog = true }
-                        )
-                        SettingsDivider()
-                        SettingsRow(
-                            iconRes = R.drawable.ic_key,
-                            title = "Use existing token",
-                            subtitle = "Save a token you already have on this device",
-                            onClick = { showUseExistingTokenDialog = true }
-                        )
-                        SettingsDivider()
-                        SettingsRow(
                             iconRes = R.drawable.ic_cloud_upload,
-                            title = "Backup now",
-                            subtitle = "Upload ${cards.size} cards with the saved token",
-                            enabled = !localToken.isNullOrBlank() && !isBusy,
+                            title = if (isBusy) "Backing up..." else "Back up now",
+                            subtitle = if (hasCode) {
+                                "Save ${cards.size} cards to the cloud"
+                            } else {
+                                "Create your backup code & save ${cards.size} cards"
+                            },
+                            enabled = !isBusy,
                             onClick = {
-                                val token = localToken ?: return@SettingsRow
                                 isBusy = true
                                 scope.launch {
-                                    val status = CloudBackupManager.uploadBackup(cards, token)
+                                    var activeToken = localToken
+                                    var createdNew = false
+                                    if (activeToken.isNullOrBlank()) {
+                                        activeToken = CloudBackupManager.generateToken()
+                                        AppSettings.setCloudBackupToken(context, activeToken)
+                                        localToken = activeToken
+                                        createdNew = true
+                                    }
+                                    val status = CloudBackupManager.uploadBackup(cards, activeToken)
                                     if (status.success) {
                                         status.updatedAt?.takeIf { it.isNotBlank() }?.let {
                                             AppSettings.setLastCloudBackupAt(context, it)
                                             lastCloudBackupAt = it
                                         }
-                                        statusMessage = "Uploaded ${cards.size} cards to backup"
+                                        if (createdNew) {
+                                            revealedToken = activeToken
+                                        }
+                                        statusMessage = "Saved ${cards.size} cards to cloud"
                                     } else {
                                         statusMessage = status.message
                                     }
@@ -524,32 +547,34 @@ fun SettingsScreen(
                                 }
                             }
                         )
+
                         SettingsDivider()
+
                         SettingsRow(
                             iconRes = R.drawable.ic_cloud_download,
-                            title = "Restore from token",
-                            subtitle = "Bring cards back onto this device from a backup token",
+                            title = "Restore from backup",
+                            subtitle = "Bring cards back using a backup code",
                             enabled = !isBusy,
                             onClick = { showRestoreDialog = true }
                         )
+
                         SettingsDivider()
+
                         SettingsRow(
-                            iconRes = R.drawable.ic_delete,
-                            title = "Delete current remote backup",
-                            subtitle = "Remove the backup tied to the saved token",
-                            enabled = !localToken.isNullOrBlank() && !isBusy,
-                            onClick = { showDeleteCloudBackupDialog = true }
-                        )
-                        SettingsDivider()
-                        SettingsRow(
-                            iconRes = R.drawable.ic_close,
-                            title = "Clear local token",
-                            subtitle = "Forget the token on this device only",
-                            enabled = !localToken.isNullOrBlank() && !isBusy,
+                            iconRes = R.drawable.ic_key,
+                            title = if (hasCode) "Manage backup code" else "Use an existing code",
+                            subtitle = if (hasCode) {
+                                "Switch code, create a new one, or delete cloud data"
+                            } else {
+                                "Already have a backup code from another device?"
+                            },
+                            enabled = !isBusy,
                             onClick = {
-                                AppSettings.clearCloudBackupToken(context)
-                                localToken = null
-                                statusMessage = "Local token removed from this device"
+                                if (hasCode) {
+                                    showManageCodeDialog = true
+                                } else {
+                                    showUseExistingTokenDialog = true
+                                }
                             }
                         )
                     }
@@ -1086,6 +1111,73 @@ private fun ConfirmDialog(
                     contentColor = colorScheme.onSecondary
                 )
             ) { Text("Cancel") }
+        },
+        shape = RoundedCornerShape(24.dp),
+        containerColor = colorScheme.surface
+    )
+}
+
+@Composable
+private fun ManageBackupCodeDialog(
+    maskedCode: String,
+    onDismiss: () -> Unit,
+    onUseAnotherCode: () -> Unit,
+    onCreateNewCode: () -> Unit,
+    onClearLocalCode: () -> Unit,
+    onDeleteCloudBackup: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Manage backup code", color = colorScheme.onSurface) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Current code: $maskedCode",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.onSurface.copy(alpha = 0.68f),
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                SettingsCard {
+                    SettingsRow(
+                        iconRes = R.drawable.ic_key,
+                        title = "Use a different code",
+                        subtitle = "Switch to a backup code from another device",
+                        onClick = onUseAnotherCode
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        iconRes = R.drawable.ic_key_plus,
+                        title = "Create new code",
+                        subtitle = "Generate a fresh backup code",
+                        onClick = onCreateNewCode
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        iconRes = R.drawable.ic_close,
+                        title = "Disconnect this device",
+                        subtitle = "Forget code locally (cloud data stays safe)",
+                        onClick = onClearLocalCode
+                    )
+                    SettingsDivider()
+                    SettingsRow(
+                        iconRes = R.drawable.ic_delete,
+                        title = "Delete cloud backup",
+                        subtitle = "Permanently remove remote backup data",
+                        onClick = onDeleteCloudBackup
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colorScheme.secondary,
+                    contentColor = colorScheme.onSecondary
+                )
+            ) { Text("Close") }
         },
         shape = RoundedCornerShape(24.dp),
         containerColor = colorScheme.surface

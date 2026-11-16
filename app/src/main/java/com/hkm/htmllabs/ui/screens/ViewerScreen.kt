@@ -110,6 +110,13 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
     var canGoForward by remember { mutableStateOf(false) }
     var localPageUrl by remember { mutableStateOf<String?>(null) }
     var isFullscreen by remember { mutableStateOf(false) }
+    // Defer WebView instantiation until the Hero Morph animation settles so opening is 120Hz silky smooth
+    var isWebViewMounted by remember(card.id) { mutableStateOf(false) }
+
+    LaunchedEffect(card.id) {
+        kotlinx.coroutines.delay(260L)
+        isWebViewMounted = true
+    }
 
     // Mini-browser interactive states (permissions, file upload, JS dialogs, custom video fullscreen)
     var pendingPermissionRequest by remember { mutableStateOf<PermissionRequest?>(null) }
@@ -307,11 +314,12 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
                 }
             }
 
-            AndroidView(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(if (isFullscreen) Modifier else Modifier.navigationBarsPadding())
-                    .background(colorScheme.background),
+            if (isWebViewMounted) {
+                AndroidView(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(if (isFullscreen) Modifier else Modifier.navigationBarsPadding())
+                        .background(colorScheme.background),
                 factory = { ctx ->
                     val blobBridge = BlobDownloadBridge(ctx)
                     WebView(ctx).apply {
@@ -603,6 +611,7 @@ fun ViewerScreen(card: HtmlCard, onClose: () -> Unit, onEdit: () -> Unit) {
                     }
                 }
             )
+            }
         }
 
         if (isLoading) {

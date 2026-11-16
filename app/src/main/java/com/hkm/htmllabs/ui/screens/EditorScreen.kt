@@ -86,6 +86,15 @@ fun EditorScreen(
     var tags by remember { mutableStateOf(card?.tags ?: emptyList()) }
     var showTagColorPicker by remember { mutableStateOf(false) }
     var editingTagIndex by remember { mutableStateOf<Int?>(null) }
+    // Defer heavy HTML text layout until the Hero Morph animation settles
+    var isCodeFieldReady by remember(card?.id) { mutableStateOf(card == null || card.htmlContent.length < 1500) }
+
+    LaunchedEffect(card?.id) {
+        if (!isCodeFieldReady) {
+            kotlinx.coroutines.delay(220L)
+            isCodeFieldReady = true
+        }
+    }
 
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -409,36 +418,47 @@ fun EditorScreen(
             ) {
                 val scrollState = rememberScrollState()
                 Box(modifier = Modifier.padding(16.dp)) {
-                    BasicTextField(
-                        value = htmlContent,
-                        onValueChange = { htmlContent = it },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scrollState),
-                        textStyle = TextStyle(
-                            color = colorScheme.onSurface,
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace,
-                            lineHeight = 18.sp
-                        ),
-                        cursorBrush = SolidColor(colorScheme.primary),
-                        decorationBox = { innerTextField ->
-                            Box(modifier = Modifier.fillMaxSize()) {
-                                if (htmlContent.isEmpty()) {
-                                    Text(
-                                        text = "<!DOCTYPE html>\n<html>\n<head>\n  <title>My Page</title>\n</head>\n<body>\n  \n</body>\n</html>",
-                                        style = TextStyle(
-                                            color = colorScheme.onSurface.copy(alpha = 0.3f),
-                                            fontSize = 12.sp,
-                                            fontFamily = FontFamily.Monospace,
-                                            lineHeight = 18.sp
+                    if (!isCodeFieldReady) {
+                        Text(
+                            text = "Loading HTML code...",
+                            style = TextStyle(
+                                color = colorScheme.onSurface.copy(alpha = 0.4f),
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                    } else {
+                        BasicTextField(
+                            value = htmlContent,
+                            onValueChange = { htmlContent = it },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(scrollState),
+                            textStyle = TextStyle(
+                                color = colorScheme.onSurface,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = 18.sp
+                            ),
+                            cursorBrush = SolidColor(colorScheme.primary),
+                            decorationBox = { innerTextField ->
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    if (htmlContent.isEmpty()) {
+                                        Text(
+                                            text = "<!DOCTYPE html>\n<html>\n<head>\n  <title>My Page</title>\n</head>\n<body>\n  \n</body>\n</html>",
+                                            style = TextStyle(
+                                                color = colorScheme.onSurface.copy(alpha = 0.3f),
+                                                fontSize = 12.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                lineHeight = 18.sp
+                                            )
                                         )
-                                    )
+                                    }
+                                    innerTextField()
                                 }
-                                innerTextField()
                             }
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }

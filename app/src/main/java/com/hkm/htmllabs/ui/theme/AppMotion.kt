@@ -309,6 +309,8 @@ fun AppleLayeredOverlayHost(
         val reveal = if (overlayVisible) (1f - dismissProgress.value).coerceIn(0f, 1f) else 0f
 
         // LAYER 0: Base workspace with synchronized Z-depth parallax & optical scrim
+        // Note: Avoid animating alpha on Layer 0 itself so Android doesn't allocate a full-screen
+        // offscreen saveLayer every frame; the black scrim Box handles depth dimming cleanly.
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -316,7 +318,6 @@ fun AppleLayeredOverlayHost(
                     val depthScale = if (reduceMotion) 1f else 1f - 0.055f * reveal
                     scaleX = depthScale
                     scaleY = depthScale
-                    alpha = 1f - 0.10f * reveal
                 }
         ) {
             baseContent()
@@ -325,7 +326,7 @@ fun AppleLayeredOverlayHost(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.22f * reveal))
+                        .background(Color.Black.copy(alpha = 0.24f * reveal))
                 )
             }
         }
@@ -384,13 +385,15 @@ fun AppleLayeredOverlayHost(
                 }
             }
 
-            Surface(
-                shape = RoundedCornerShape(cornerDp),
-                shadowElevation = if (dismissProgress.value > 0.01f) 16.dp else 0.dp,
-                color = MaterialTheme.colorScheme.background,
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {
+                        val cornerPx = cornerDp.toPx()
+                        if (cornerPx > 0.5f) {
+                            clip = true
+                            shape = RoundedCornerShape(cornerPx)
+                        }
                         if (reduceMotion) {
                             alpha = pReveal
                             return@graphicsLayer
@@ -430,6 +433,7 @@ fun AppleLayeredOverlayHost(
                             alpha = (1f - d * 1.15f).coerceIn(0f, 1f)
                         }
                     }
+                    .background(MaterialTheme.colorScheme.background)
             ) {
                 overlayContent(currentKey)
             }
